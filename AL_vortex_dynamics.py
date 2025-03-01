@@ -50,11 +50,17 @@ def vd(Js,Jp,muv):
 
 
 ### This function will implement one time step update for the vortex densities
-### First it will flow each of the densities independently
-### Then it will annihilate the excess density on overlapping sites 
-### We also implement absorbing boundary conditions by allowing vortices to flow over the edge, and then simply annhilating those that do
 ### We pass the two densities as [n+,n-]
 ### muvdtdx = muv*dt/dx and is redefined to include the lattice constant and time step 
+
+### The method will consist of two steps
+### First it will flow each of the densities independently according to the continuity equations
+### This will take care for boundary conditions that we implement as follows:
+### First we introduce a fictious boundary vortex current 
+### If the flux of vortices is 
+### Then it will annihilate the excess density on overlapping sites 
+
+### We also implement absorbing boundary conditions by allowing vortices to flow over the edge, and then simply annhilating those that do
 def update_vortices(n,Js,Jp,muvdtdx):
 	### First we flow according to the vortex convection
 	### We will return a new array of vortex profiles 
@@ -143,8 +149,8 @@ def main():
 	dt = times[1]-times[0]
 	nvs = np.zeros((nts,2,nxs))
 
-	nvs[0,0,:] = np.maximum(0.1*np.sign(xpts),0.)
-	nvs[0,1,:] = np.maximum(-0.1*np.sign(xpts),0.)
+	nvs[0,0,:] = np.maximum(-0.1*np.sign(xpts),0.)
+	nvs[0,1,:] = np.maximum(0.1*np.sign(xpts),0.)
 
 	for i in range(1,nts):
 		nvs[i,:,:] = update_vortices(nvs[i-1,:,:],Js,Jp,muv*dt/dx)
