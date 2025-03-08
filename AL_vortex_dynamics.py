@@ -91,7 +91,7 @@ def update_vortices(n,Js,Jp,muvdtdx):
 			n_out[i,x] = n[i,x] - (n[i,x+1] - n[i,x])*v[x+1] - (n[i,x] - n[i,x-1])*v[x]
 
 		### Now for the right boundary
-		n_out[i,-1] = n[i,-1] - (nR - n[i,-1])*v[-1]*float(v[-1] > 0.) - (n[i,-1] - n[i,-2])*v[-2] 
+		n_out[i,-1] = n[i,-1] - (n[i,-1] - n[i,-2])*v[-2] - (nR - n[i,-1])*v[-1]*float(v[-1] > 0.) 
 
 	### Now we annihilate overlapping densities
 	### We do such that if n+ > n- we take n+ -> n+- n- and n- -> 0 and vice versa if n- > n+.
@@ -101,71 +101,110 @@ def update_vortices(n,Js,Jp,muvdtdx):
 	return n_out
  
 
-### Given a discretized array of points on the domain this generates the Biot-Savart integral equation kernel 
+### Given a discretized array of points on the domain this generates the Biot-Savart-London integro-differential equation kernel 
 ### Can be run once per geometry
-def biot_savart_kernel(xpts):
-	N = len(x)
-	kernel = np.zeros((N,N))
-	dx = xpts[1]-xpts[0]
+### The operator is 
+### [ -l_P/2 delta(y-y') d/dy' + 1/2pi int_-W/2^W/2 dy' (y-y')/( (y-y')^2 + z^2 ) ] J(y') 
+### It is likely that a good basis for this matrix is in terms of the Chebyshev polynomials, which diagonalize the integral part of the kernel exactly
+### Actually this operator acts on the link variable (currents) and returns a profile on the site variables (vortices)
+### It is therefore not square 
+def biot_savart_kernel(sites,links,lPearl):
+	Ns = len(sites)
+	Nl = len(links)
+	kernel = np.zeros((Ns,Nl))
+	dy = links[1]-links[0]
 
-	z = xi
+	### This constructs the derivative term in the bulk
+	for j in range(Ns):
+		kernel[j,j+1] = -0.5*lPearl/dy
+		kernel[j,j] = +0.5*lPearl/dy
 
-	for j in range(N):
-		x = xpts[j]
-		for k in range(N):
-			y = xpts[k]
+	### Now we construct the Biot-Savart integral part of the kernel 
+	for j in range(Ns):
+		site = sites[j]
 
-			kernel[j,k] = 1./(2.*np.pi) * (x - y)/( (x -y)**2 + z**2 ) 
+		for k in range(Nl):
+			link = links[k]
+
+			kernel[j,k] += dy/(2.*np.pi) * 1./(site - link)
 
 
-	return kernel*dx 
+	return kernel 
 
 
-### This is the full kernel for the current profile including both Biot-Savart and London equations 
-def current_kernel(xpts,l_Pearl):
-	N = len(x)
-	kernel = biot_savart_kernel(xpts)
-	dx = xpts[1]-xpts[0]
+### This method inverts the Biot-Savart kernel to find the current from the vortex dustribution and total current 
+def invert_kernel(kernel,nv,Jtot):
+	### The kernel relates the current to the vortex density by 
+	### Kernel * J = nv
+	### However the current is defined on links of which there are N+1 and the vorticity is defined on sites of which there are N
+	### Therefore this system is not square and we must supplement it with one more linear equation
+	### This is the condition that 1/W integral dy J(y) = J(t) the total current density
+	### From this we can find a square matrix and invert 
+	N = kernel.shape[0]
+	square_kernel = np.zeros((N+1,N+1))
+	square_kernel[:-1,:] = kernel 
+	square_kernel[-1,:] = 1./float(N+1)*np.ones(N+1)
 
-	for j in range(1,N):
-		kernel[j,j-1] += - l_Pearl/dx 
-		kernel[j,j] += l_Pearl/dx  
+	rhs = np.zeros(N+1)
+	rhs[:-1] = nv
+	rhs[-1] = Jtot
 
-	return kernel
-
+	return np.linalg.inv(square_kernel)@rhs
 
 def main():
 	W = 20.*um ### Sample width
 	d = .05*um ### Sample thickness
 	l = .15*um ### London penetration depth
-	lP = 2.*l**2/d ### Pearl length 2lambda^2/d
+	lPearl = 2.*l**2/d ### Pearl length 2lambda^2/d
 	muv = (.04*um/ps)/Jc ### Vortex mobility, specified by drift velocity at depairing current 
 	Jp = 0.05*Jc ### We take depinning current to be 5% of the depairing current 
 
 	### Vortices live on sites and reside at -W/2 + dx, -W/2 + 2dx, ..., W/2-dx
 	### Currents live on links and reside at -W/2 + dx/2, -W/2 + 3dx/2, ..., W/2-dx/2
-	N = 10
+	N = 30
 	sites, links = gen_lattices(W,N)
 	dx = sites[1] - sites[0]
 
+	kernel = biot_savart_kernel(sites,links,lPearl)
+	
 	### Supercurrent density profile 
 	### Supercurrent lives on the links 
-	Js = 100.*np.cosh(links*2./W)/np.cosh(1.)*Jp
+	Js = 1.2*np.cosh(links*2./W)/np.cosh(1.)*Jp
 
 	plt.plot(links,Js,color='purple',marker='.')
 	plt.axhline(Jp,color='gray',linestyle='dashed')
 	plt.xlabel(r'$x$ [$\mu$m]')
 	plt.ylabel(r'$J_s/J_c$')
-	plt.ylim(0.,2.*max(Js))
 	plt.show()
 
-	nts = 2000
-	times = np.linspace(0.,100.*ps,nts)
+	nvs = kernel@Js
+
+	Js = invert_kernel(kernel,nvs,1.3*Jp)
+
+	plt.plot(sites,kernel@Js,color='red',marker='x')
+	plt.xlabel(r'$x$ [$\mu$m]')
+	plt.ylabel(r'$\phi_0 n_v$ [$\phi/\mu$m$^2$]')
+	plt.show()
+
+	plt.plot(links,Js,color='purple',marker='.')
+	plt.axhline(Jp,color='gray',linestyle='dashed')
+	plt.xlabel(r'$x$ [$\mu$m]')
+	plt.ylabel(r'$J_s/J_c$')
+	plt.show()
+
+
+	quit()
+
+
+	nts = 1000
+	times = np.linspace(0.,10.*ps,nts)
 	dt = times[1]-times[0]
 	nvs = np.zeros((nts,2,len(sites)))
 
-	nvs[0,0,:] = np.maximum(-0.01*np.sin(2.*np.pi*sites/W),0.)
-	nvs[0,1,:] = np.maximum(0.01*np.sin(2.*np.pi*sites/W),0.)
+	#nvs[0,0,:] = np.maximum(-0.01*np.sign(2.*np.pi*sites/W),0.)
+	#nvs[0,1,:] = np.maximum(0.01*np.sign(2.*np.pi*sites/W),0.)
+	nvs[0,0,:] = np.maximum(np.array([ 0.01*float(np.abs(x) < 2.*um) for x in sites ]),0.)
+	nvs[0,1,:] = np.zeros_like(nvs[0,0,:])
 
 	for i in range(1,nts):
 		nvs[i,:,:] = update_vortices(nvs[i-1,:,:],Js,Jp,muv*dt/dx)
@@ -186,16 +225,16 @@ def main():
 	plt.show()
 
 
-	clrs = cm.coolwarm(np.linspace(0.,1.,nts))
+	clrs = cm.Purples(np.linspace(0.,1.,nts))
 	for i in range(nts):
 		plt.plot(sites,nvs[i,0,:] - nvs[i,1,:],color=clrs[i])
 	plt.xlabel(r'$x$ [$\mu$m]')
-	plt.ylabel(r'$n_v$ [$\phi_0/\mu$m$^{2}$]')
+	plt.ylabel(r'$\Delta n_v$ [$\phi_0/\mu$m$^{2}$]')
 	plt.show()
 
-	plt.plot(times,np.sum(nvs[:,0,:],axis=-1))
+	plt.plot(times,np.sum(nvs[:,0,:]- nvs[:,1,:],axis=-1))
 	plt.xlabel(r'$t$ [ps]')
-	plt.ylabel(r'$\langle n_+\rangle$ [$\phi_0/\mu$m$^{2}$]')
+	plt.ylabel(r'$\langle \Delta n_v\rangle$ [$\phi_0/\mu$m$^{2}$]')
 	plt.show()
 
 
