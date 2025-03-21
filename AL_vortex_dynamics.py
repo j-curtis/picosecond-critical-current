@@ -24,7 +24,6 @@ plt.rc('lines', linewidth=2.5)
 
 um = 1. ### Length is measured in microns
 ps = 1. ### Time is measured in ps 
-xi = 2.e-3 *um ### We use coherence length as the short-distance cutoff length 
 Jc = 1. ### We measure current density in units of the depairing current density Jc 
 
 ### This gives the relation between drift velocity and superfluid current density as a function of current
@@ -82,16 +81,19 @@ def update_vortices(n,Js,Jp,muvdtdx):
 		### First we do the left end point
 		### We only allow vortices to flow outwards at the boundary 
 		### Fictious boundary densities 
-		nL = 0.
-		nR = 0.
-		n_out[i,0] = n[i,0] - (n[i,1] - n[i,0])*v[1] - v[0]*n[i,0]*float(v[0]<0.)
+		nR = 0.*n[i,0]
+		nL = 0.*n[i,-1]
+		n_out[i,0] = n[i,0] - n[i,0]*(v[1]-v[0]) - 0.5*( v[1]*(n[i,1]-n[i,0]) + v[0]*(n[i,0] - nL) )
+		#n[i,0]*v[0] #(n[i,1] - n[i,0])*v[1] - v[0]*n[i,0]*float(v[0]<0.)
 
 		### Now for the bulk which can have unimpeded flow 
 		for x in range(1,len(n[i,:])-1):
-			n_out[i,x] = n[i,x] - (n[i,x+1] - n[i,x])*v[x+1] - (n[i,x] - n[i,x-1])*v[x]
+			n_out[i,x] = n[i,x] - (v[x+1]-v[x])*n[i,x] - 0.5*( v[x]*(n[i,x]-n[i,x-1]) + v[x+1]*(n[i,x+1]-n[i,x])  )
+			# n[i,x-1]*v[x] - n[i,x+1]*v[x+1]#(n[i,x+1] - n[i,x])*v[x+1] - (n[i,x] - n[i,x-1])*v[x]
 
 		### Now for the right boundary
-		n_out[i,-1] = n[i,-1] - (n[i,-1] - n[i,-2])*v[-2] + n[i,-1]*v[-1]*float(v[-1] > 0.) 
+		n_out[i,-1] = n[i,-1] - n[i,-1]*(v[-1]-v[-2]) - 0.5*( v[-2]*(n[i,-1]-n[i,-2]) + v[-1]*(nR - n[i,-1]) )
+		#n[i,-1]*(v[-1]-v[-2]) #- n[i,-1]*v[-1]#- (n[i,-1] - n[i,-2])*v[-2] #+ n[i,-1]*v[-1]*float(v[-1] > 0.) 
 
 	### Now we annihilate overlapping densities
 	### We do such that if n+ > n- we take n+ -> n+- n- and n- -> 0 and vice versa if n- > n+.
@@ -116,8 +118,8 @@ def biot_savart_kernel(sites,links,lPearl):
 
 	### This constructs the derivative term in the bulk
 	for j in range(Ns):
-		kernel[j,j+1] = -0.5*lPearl/dy
-		kernel[j,j] = +0.5*lPearl/dy
+		kernel[j,j+1] = -1*-0.5*lPearl/dy
+		kernel[j,j] = -1*0.5*lPearl/dy
 
 	### Now we construct the Biot-Savart integral part of the kernel 
 	for j in range(Ns):
@@ -126,7 +128,7 @@ def biot_savart_kernel(sites,links,lPearl):
 		for k in range(Nl):
 			link = links[k]
 
-			kernel[j,k] += dy/(2.*np.pi) * 1./(site - link)
+			kernel[j,k] += -1*dy/(2.*np.pi) * 1./(site - link)
 
 
 	return kernel 
@@ -168,30 +170,31 @@ def main():
 	d = .05*um ### Sample thickness
 	l = .15*um ### London penetration depth
 	lPearl = 2.*l**2/d ### Pearl length 2lambda^2/d
-	muv = 10.*(.04*um/ps)/Jc ### Vortex mobility, specified by drift velocity at depairing current 
-	Jp = 0.05*Jc ### We take depinning current to be 5% of the depairing current 
+	muv = (1.*um/ps)/Jc ### Vortex mobility, specified by drift velocity at critical current 
+	Jp = 1.*Jc ### Depinning current 
 
 	### Vortices live on sites and reside at -W/2 + dx, -W/2 + 2dx, ..., W/2-dx
 	### Currents live on links and reside at -W/2 + dx/2, -W/2 + 3dx/2, ..., W/2-dx/2
-	N = 100
+	N = 30
 	sites, links = gen_lattices(W,N)
 	dx = sites[1] - sites[0]
 
-	nts = 500
-	times = np.linspace(0.,50.*ps,nts)
+	nts = 10000
+	times = np.linspace(0.,2.*ps,nts)
 	dt = times[1]-times[0]
 
 	kernel = biot_savart_kernel(sites,links,lPearl)
 	invkernel = inverse_kernel(kernel)
 	
-	Jav = 1.5*Jp
+	Jav = 1.*Jp
 	
-	nvs = np.zeros((nts,2,len(sites))) 
+	nvs = 0.05*np.ones((nts,2,len(sites))) 
 	Js = np.zeros((nts,len(links)))
 
-	nvs[0,0,N//3] = 0.1
-	nvs[0,1,2*N//3] = 0.1
 	Js[0,:] = update_current(invkernel,nvs[0,:,:],Jav)
+
+	vs = np.zeros((nts,len(links)))
+	vs[0,:] = vd(Js[0,:],Jp,muv)
 
 	### Initial current distribution without vortices
 	plt.plot(links,Js[0,:],color='purple')
@@ -203,6 +206,8 @@ def main():
 	for i in range(1,nts):
 		nvs[i,:,:] = update_vortices(nvs[i-1,:,:],Js[i-1,:],Jp,muv*dt/dx)
 		Js[i,:] = update_current(invkernel,nvs[i,:,:],Jav)
+		vs[i,:] = vd(Js[i,:],Jp,muv)
+
 
 	clrs = cm.Blues(np.linspace(0.3,1.,nts))
 	for i in range(nts):
@@ -226,6 +231,12 @@ def main():
 	plt.ylabel(r'$J_s/J_c$')
 	plt.show()
 
+	plt.plot(times,Js[:,0])
+	#plt.plot(times,Js[:,N//2])
+	plt.axhline(Jp,color='gray',linestyle='dashed')
+	plt.xlabel(r't [ps]')
+	plt.ylabel(r'$J_L/J_c$')
+	plt.show()
 
 
 if __name__ == "__main__":
