@@ -10,7 +10,7 @@ from matplotlib import cm
 from matplotlib import colors as mclr
 from collections import namedtuple 
 
-params = namedtuple('params','W d xi lPearl sigma Idc')
+params = namedtuple('params','W d xi lPearl sigma2D Idc Ips t0 td')
 
 ### Plotting settings 
 #plt.rc('figure', dpi=100)
@@ -27,6 +27,9 @@ params = namedtuple('params','W d xi lPearl sigma Idc')
 um = 1. ### Length is measured in microns
 ps = 1. ### Time is measured in ps 
 phi0 = 1. ### We measure fields and currents in units of flux quantum  
+
+mT = .4836* phi0/um**2 ### This is millitesla in units of flux quantum and microns
+mA = 1.*um*mT/0.795 ### This converts from mT to mA assuming mu0 = 1 units 
 
 ### We define a site lattice where current density resides and a link lattice where gradients live
 ### These have coordinates sites: -W/2 + n dy with n = 0,1,2,...N and links: l_m = -W/2 + (m+1/2)dy with m = 0,1,2,...N-1
@@ -45,7 +48,7 @@ def gen_lattices(W,N):
 
 ### This returns the total current as a function of time -- for the moment we use a simple static total current 
 def Itot(t, par):
-	return par.Idc 
+	return par.Idc + par.Ips*np.exp(-(t-par.t0)**2/(par.td)**2)
 
 ### This now returns the equations of motion function for the velocity field in terms of the instaneous total current and parameters
 ### For total current this calls the total current function 
@@ -69,8 +72,8 @@ def eom(t,Q, sites, links, par):
 	for i in range(Ns-1):
 		rhs[i] = -2.*np.pi/dy*( Q[i+1] - Q[i]) ### This should give finite element derivative for Q on the links 
 
-	eom = -1./(2.*par.d*par.sigma)*np.linalg.inv(BSkernel)@rhs ### This inverts the Biot-Savart kernel and divides by conductivity 
-	eom += -1./(par.d*par.sigma*par.lPearl)*Q[:]*(np.ones_like(Q) - (2.*np.pi*par.xi/phi0)**2*Q[:]**2) 
+	eom = -1./(2.*par.sigma2D)*np.linalg.inv(BSkernel)@rhs ### This inverts the Biot-Savart kernel and divides by conductivity 
+	eom += -1./(par.sigma2D*par.lPearl)*Q[:]*(np.ones_like(Q) - (2.*np.pi*par.xi/phi0)**2*Q[:]**2) 
 
 	return eom 
 
@@ -91,26 +94,37 @@ def solve_eom(sites,links,times,par):
 
 	return sol
 
+### This will compute the average electric vs time given the supercurrent 
+### Q is passed as an array of the form [y,t]
+def voltage(times,Q):
+	qav = np.mean(Q,axis=0)
+	dt = times[1] - times[0]
+
+	return np.gradient(qav,dt)
+
 
 
 def main():
 
 	W = 20.*um ### Sample width
 	d = .05*um ### Sample thickness
-	xi = .002*um ### Coherence length is very short 
+	xi = 0.01*um#.002*um ### Coherence length is very short 
 	l = .15*um ### London penetration depth
 	lPearl = 2.*l**2/d ### Pearl length 2lambda^2/d
-	sigma = 10. ### Check units 
-	Idc = 300.*2.*np.pi*phi0 ### Check units 
-	print(Idc)
+	sigma2D = 0.4*ps/um ### 2D conductivity has units of ps/pm
 
-	param = params(W,d,xi,lPearl,sigma,Idc)
+	Idc = 0.*mA 
+	Ips = 327.5*mA 
+	t0 = 0.*ps 
+	td = 3.*ps 
 
-	N = 40
+	param = params(W,d,xi,lPearl,sigma2D,Idc,Ips,t0,td)
+
+	N = 30
 	sites, links = gen_lattices(W,N)
 
 	nts = 1000
-	times = np.linspace(0.,100.*ps,nts)
+	times = np.linspace(-30.*ps,30.*ps,nts)
 
 	Q0 = np.zeros_like(sites)
 
@@ -120,11 +134,23 @@ def main():
 	sol = intg.solve_ivp(eom,(t0,tf),Q0,t_eval=times,args=(sites,links,param))
 	print(sol.message)
 
-	plt.plot(sites, 2.*np.pi*xi*sol.y[:,-1]/phi0)
-	plt.xlabel(r'$y$ [$\mu$m]')
-	plt.ylabel(r'$Q$ [$\phi_0/\xi$]')
-	plt.show()
+	inds = np.array(list(range(0,nts,50)))
+	clrs = cm.Purples(np.linspace(0.2,1.,len(inds)))
 
+	#for i in range(len(inds)):
+	#	plt.plot(sites, sol.y[:,inds[i]]/(mA),color=clrs[i])
+	#plt.xlabel(r'$y$ [$\mu$m]')
+	#plt.ylabel(r'$Q$ [mA]')
+	#plt.show()
+
+	E = voltage(sol.t,sol.y)
+
+	plt.plot(sol.t[30:], E[30:])
+	plt.xlim(-10.*ps,10.*ps)
+	plt
+	plt.xlabel(r'$t$ [ps]')
+	plt.ylabel(r'$E(t)$')
+	plt.show()
 
 
 
