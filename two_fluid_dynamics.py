@@ -10,7 +10,7 @@ from matplotlib import cm
 from matplotlib import colors as mclr
 from collections import namedtuple 
 
-params = namedtuple('params','W d xi lPearl sigma2D Idc Ips t0 td')
+params = namedtuple('params','W d xi lPearl sigma2D tauGL Idc Ips t0 td')
 
 ### Plotting settings 
 #plt.rc('figure', dpi=100)
@@ -29,7 +29,8 @@ ps = 1. ### Time is measured in ps
 phi0 = 1. ### We measure fields and currents in units of flux quantum  
 
 mT = .4836* phi0/um**2 ### This is millitesla in units of flux quantum and microns
-mA = 1.*um*mT/0.795 ### This converts from mT to mA assuming mu0 = 1 units 
+mA = 1.2566*um*mT ### This converts from mT to mA assuming mu0 = 1 units 
+mV = .2418/ps ### millivolts in units of inverse THz = h*1THz/e
 
 ### We define a site lattice where current density resides and a link lattice where gradients live
 ### These have coordinates sites: -W/2 + n dy with n = 0,1,2,...N and links: l_m = -W/2 + (m+1/2)dy with m = 0,1,2,...N-1
@@ -52,12 +53,28 @@ def Itot(t, par):
 
 ### This now returns the equations of motion function for the velocity field in terms of the instaneous total current and parameters
 ### For total current this calls the total current function 
-def eom(t,Q, sites, links, par):
+### The vector X = [Q, f] where Q is the superfluid velocity and f is the amplitude of the order parameter field 
+### These both live on the sites
+def eom(t,X, sites, links, par):
 	### First we construct the sites and links and the relevant lattices 
 
 	Ns = len(sites)
 	Nl = len(links)
 	dy = links[1]-links[0]
+
+	### Now we extract the Q and f degrees of freedom
+	Q = X[:Ns]
+	f = X[Ns:]
+
+	out = np.zeros_like(X)
+
+	### This evolves the amplitude 
+	### It has a nonlinear local part and a diffusion term 
+	dfdy = np.gradient(f,dy)
+	d2fdy2 = np.gradient(dfdy,dy)
+
+	out[Ns:] = 1./par.tauGL*(np.ones_like(f) - f**2 - (2.*np.pi*par.xi/phi0)**2 * Q**2 )*f + par.xi**2/par.tauGL *d2fdy2 ### This is the TDGL in the y dimension
+
 
 	BSkernel = np.zeros((Ns,Ns)) ### The matrix is rendered square with the first N entries the derivative and integral kernels and the last entry the total current constraint
 	
@@ -70,12 +87,12 @@ def eom(t,Q, sites, links, par):
 	rhs[-1] = -Itot(t,par)
 
 	for i in range(Ns-1):
-		rhs[i] = -2.*np.pi/dy*( Q[i+1] - Q[i]) ### This should give finite element derivative for Q on the links 
+		rhs[i] = -2.*np.pi*(Q[i+1]-Q[i])/dy ### This should give finite element derivative for Q on the links 
 
-	eom = -1./(2.*par.sigma2D)*np.linalg.inv(BSkernel)@rhs ### This inverts the Biot-Savart kernel and divides by conductivity 
-	eom += -1./(par.sigma2D*par.lPearl)*Q[:]*(np.ones_like(Q) - (2.*np.pi*par.xi/phi0)**2*Q[:]**2) 
+	out[:Ns] = -1./(2.*par.sigma2D)*np.linalg.inv(BSkernel)@rhs ### This inverts the Biot-Savart kernel and divides by conductivity 
+	out[:Ns] += -1./(par.sigma2D*par.lPearl)*Q[:]*f[:]**2
 
-	return eom 
+	return out 
 
 ### This will solve the equations of motion for a given set of times and parameters 
 def solve_eom(sites,links,times,par):
@@ -85,12 +102,14 @@ def solve_eom(sites,links,times,par):
 	dy = links[1]-links[0]
 
 	Q0 = np.zeros_like(sites)
+	f0 = np.ones_like(sites)
+
+	X0 = np.concatenate((Q0,f0))
 
 	t0 = times[0]
 	tf = times[-1]
 
-	sol = intg.solve_ivp(eom,(t0,tf),Q0,t_eval=times,args=(sites,links,par))
-	print(sol.t.shape)
+	sol = intg.solve_ivp(eom,(t0,tf),X0,t_eval=times,args=(sites,links,par))
 
 	return sol
 
@@ -102,54 +121,54 @@ def voltage(times,Q):
 
 	return np.gradient(qav,dt)
 
-
-
 def main():
 
-	W = 20.*um ### Sample width
+	W = 10.*um ### Sample width
 	d = .05*um ### Sample thickness
-	xi = 0.01*um#.002*um ### Coherence length is very short 
+	L = 20.*um ### Sample length
+	xi = 0.01*um ### Coherence length is very short 
+	tauGL = 1.*ps ### GL relaxation time 
 	l = .15*um ### London penetration depth
 	lPearl = 2.*l**2/d ### Pearl length 2lambda^2/d
-	sigma2D = 0.4*ps/um ### 2D conductivity has units of ps/pm
+	sigma2D = 0.2 ### 2D conductivity is unitless
 
-	Idc = 0.*mA 
-	Ips = 327.5*mA 
+	Idc = 186*mA 
+	Ips = 1.*mA 
 	t0 = 0.*ps 
 	td = 3.*ps 
 
-	param = params(W,d,xi,lPearl,sigma2D,Idc,Ips,t0,td)
+	param = params(W,d,xi,lPearl,sigma2D,tauGL,Idc,Ips,t0,td)
 
-	N = 30
+	N = 20
 	sites, links = gen_lattices(W,N)
 
-	nts = 1000
-	times = np.linspace(-30.*ps,30.*ps,nts)
+	nts = 200
+	times = np.linspace(-100.*ps,30.*ps,nts)
 
-	Q0 = np.zeros_like(sites)
-
-	t0 = times[0]
-	tf = times[-1]
-
-	sol = intg.solve_ivp(eom,(t0,tf),Q0,t_eval=times,args=(sites,links,param))
-	print(sol.message)
+	sol = solve_eom(sites,links,times,param)
 
 	inds = np.array(list(range(0,nts,50)))
 	clrs = cm.Purples(np.linspace(0.2,1.,len(inds)))
 
-	#for i in range(len(inds)):
-	#	plt.plot(sites, sol.y[:,inds[i]]/(mA),color=clrs[i])
-	#plt.xlabel(r'$y$ [$\mu$m]')
-	#plt.ylabel(r'$Q$ [mA]')
-	#plt.show()
+	for i in range(len(inds)):
+		plt.plot(sites, sol.y[len(sites):,inds[i]],color=clrs[i])
+	plt.xlabel(r'$y$ [$\mu$m]')
+	#plt.ylabel(r'Qf$ [mA]')
+	plt.ylabel(r'$f$')
+	plt.show()
+
+	for i in range(len(inds)):
+		plt.plot(sites, sol.y[:len(sites),inds[i]]/mA,color=clrs[i])
+	plt.xlabel(r'$y$ [$\mu$m]')
+	plt.ylabel(r'$Q$ [mA]')
+	#plt.ylabel(r'$f$')
+	plt.show()
 
 	E = voltage(sol.t,sol.y)
 
-	plt.plot(sol.t[30:], E[30:])
-	plt.xlim(-10.*ps,10.*ps)
-	plt
+	plt.plot(times, E[:]*L/mV)
 	plt.xlabel(r'$t$ [ps]')
-	plt.ylabel(r'$E(t)$')
+	plt.ylabel(r'$V$ [mV]')
 	plt.show()
 
 
