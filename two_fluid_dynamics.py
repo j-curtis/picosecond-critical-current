@@ -10,7 +10,7 @@ from matplotlib import cm
 from matplotlib import colors as mclr
 from collections import namedtuple 
 
-params = namedtuple('params','W d xi lab sigma2D tauGL Idc Ips t0 td')
+params = namedtuple('params','W d xi lab sigma2D tau Idc Ips t0 td')
 
 ### Plotting settings 
 #plt.rc('figure', dpi=100)
@@ -72,14 +72,14 @@ def eom(t,X, sites, links, par):
 	### It has a nonlinear local part and a diffusion term 
 	dfdy = np.gradient(f,dy)
 	d2fdy2 = np.gradient(dfdy,dy)
-	out[Ns:] = 1./par.tauGL*(np.ones_like(f) - f**2 - (2.*np.pi*par.xi/phi0)**2 * Q**2 )*f + par.xi**2/par.tauGL *d2fdy2 ### This is the TDGL in the y dimension
+	out[Ns:] = 1./par.tau*(np.ones_like(f) - f**2 - (2.*np.pi*par.xi/phi0)**2 * Q**2 )*f + par.xi**2/par.tau *d2fdy2 ### This is the TDGL in the y dimension
 
 
 	### To evolve the velocities we must first obtain the current density by inverting the Biot Savart law
 	BSkernel = np.zeros((Ns,Ns)) ### The matrix is rendered square with the first N entries the derivative and integral kernels and the last entry the total current constraint
 	
 	BSkernel[-1,:] = np.ones(Ns)*dy  ### Total current constraint
-	BSkernel[:-1,:] = (dy/(2.*np.pi) )/( np.tensordot(links,np.ones_like(sites),axes=-1)  - np.tensordot(np.ones_like(links),sites,axes=-1) )
+	BSkernel[:-1,:] = (dy/(2.*np.pi) )/( np.tensordot(links,np.ones_like(sites),axes=-1)  - np.tensordot(np.ones_like(links),sites,axes=-1) ) ### This is the kernel that will be inverted to obtain the current density from Biot Savart law
 
 	rhs = np.zeros(Ns)
 
@@ -87,10 +87,10 @@ def eom(t,X, sites, links, par):
 		rhs[i] = (Q[i+1]-Q[i])/dy ### This should give finite element derivative for Q on the links
 		### Importantly this has size N_s - 1 and therefore cannot simply employ the numpy gradient method
 	
-	rhs[-1] = Itot(t,par)
+	rhs[-1] = Itot(t,par) ### The last element of the array is the linear system corresponding to the condition that the total current be the given current 
 
-	out[:Ns] = 1./(par.sigma2D)*np.linalg.inv(BSkernel)@rhs ### This inverts the Biot-Savart kernel and divides by conductivity 
-	out[:Ns] += -par.d/(par.sigma2D*par.lab**2)*Q[:]*f[:]**2
+	out[:Ns] = 1./(par.sigma2D)*np.linalg.inv(BSkernel)@rhs ### This inverts the Biot-Savart kernel and divides by conductivity to find the normal fluid contribution
+	out[:Ns] += -par.d/(par.sigma2D*par.lab**2)*Q[:]*f[:]**2 ### This is superfluid part and depends also on the amplitude f^2 .
 
 	return out 
 
@@ -126,18 +126,18 @@ def main():
 	W = 10.*um ### Sample width
 	d = .05*um ### Sample thickness
 	L = 20.*um ### Sample length
-	xi = 0.01*um ### Coherence length is very short 
-	tauGL = 1.*ps ### GL relaxation time 
+	xi = 0.02*um ### Coherence length is very short 
+	tau = 1.*ps ### GL relaxation time 
 	lab = .15*um ### London penetration depth in ab plane
-	lPearl = 2.*lab**2/d ### Pearl length 2lambda^2/d
-	sigma2D = 0.2 ### 2D conductivity is unitless
+	#lPearl = 2.*lab**2/d ### Pearl length 2lambda^2/d
+	sigma2D = 1.2 ### 2D conductivity is unitless in units of e^2/h.
 
-	Idc = 170*mA 
+	Idc = 18*mA 
 	Ips = 0.*mA 
 	t0 = 0.*ps 
 	td = 3.*ps 
 
-	param = params(W,d,xi,lab,sigma2D,tauGL,Idc,Ips,t0,td)
+	param = params(W,d,xi,lab,sigma2D,tau,Idc,Ips,t0,td)
 
 	N = 20
 	sites, links = gen_lattices(W,N)
