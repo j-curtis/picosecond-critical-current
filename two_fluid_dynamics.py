@@ -10,7 +10,7 @@ from matplotlib import cm
 from matplotlib import colors as mclr
 from collections import namedtuple 
 
-params = namedtuple('params','W d xi lPearl sigma2D tauGL Idc Ips t0 td')
+params = namedtuple('params','W d xi lab sigma2D tauGL Idc Ips t0 td')
 
 ### Plotting settings 
 #plt.rc('figure', dpi=100)
@@ -72,25 +72,25 @@ def eom(t,X, sites, links, par):
 	### It has a nonlinear local part and a diffusion term 
 	dfdy = np.gradient(f,dy)
 	d2fdy2 = np.gradient(dfdy,dy)
-
 	out[Ns:] = 1./par.tauGL*(np.ones_like(f) - f**2 - (2.*np.pi*par.xi/phi0)**2 * Q**2 )*f + par.xi**2/par.tauGL *d2fdy2 ### This is the TDGL in the y dimension
 
 
+	### To evolve the velocities we must first obtain the current density by inverting the Biot Savart law
 	BSkernel = np.zeros((Ns,Ns)) ### The matrix is rendered square with the first N entries the derivative and integral kernels and the last entry the total current constraint
 	
 	BSkernel[-1,:] = np.ones(Ns)*dy  ### Total current constraint
-	BSkernel[:-1,:] = dy/( np.tensordot(links,np.ones_like(sites),axes=-1)  - np.tensordot(np.ones_like(links),sites,axes=-1) )
-
+	BSkernel[:-1,:] = (dy/(2.*np.pi) )/( np.tensordot(links,np.ones_like(sites),axes=-1)  - np.tensordot(np.ones_like(links),sites,axes=-1) )
 
 	rhs = np.zeros(Ns)
 
-	rhs[-1] = -Itot(t,par)
+	for i in range(Nl):
+		rhs[i] = (Q[i+1]-Q[i])/dy ### This should give finite element derivative for Q on the links
+		### Importantly this has size N_s - 1 and therefore cannot simply employ the numpy gradient method
+	
+	rhs[-1] = Itot(t,par)
 
-	for i in range(Ns-1):
-		rhs[i] = -2.*np.pi*(Q[i+1]-Q[i])/dy ### This should give finite element derivative for Q on the links 
-
-	out[:Ns] = -1./(2.*par.sigma2D)*np.linalg.inv(BSkernel)@rhs ### This inverts the Biot-Savart kernel and divides by conductivity 
-	out[:Ns] += -1./(par.sigma2D*par.lPearl)*Q[:]*f[:]**2
+	out[:Ns] = 1./(par.sigma2D)*np.linalg.inv(BSkernel)@rhs ### This inverts the Biot-Savart kernel and divides by conductivity 
+	out[:Ns] += -par.d/(par.sigma2D*par.lab**2)*Q[:]*f[:]**2
 
 	return out 
 
@@ -128,16 +128,16 @@ def main():
 	L = 20.*um ### Sample length
 	xi = 0.01*um ### Coherence length is very short 
 	tauGL = 1.*ps ### GL relaxation time 
-	l = .15*um ### London penetration depth
-	lPearl = 2.*l**2/d ### Pearl length 2lambda^2/d
+	lab = .15*um ### London penetration depth in ab plane
+	lPearl = 2.*lab**2/d ### Pearl length 2lambda^2/d
 	sigma2D = 0.2 ### 2D conductivity is unitless
 
-	Idc = 186*mA 
-	Ips = 1.*mA 
+	Idc = 170*mA 
+	Ips = 0.*mA 
 	t0 = 0.*ps 
 	td = 3.*ps 
 
-	param = params(W,d,xi,lPearl,sigma2D,tauGL,Idc,Ips,t0,td)
+	param = params(W,d,xi,lab,sigma2D,tauGL,Idc,Ips,t0,td)
 
 	N = 20
 	sites, links = gen_lattices(W,N)
